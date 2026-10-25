@@ -866,7 +866,15 @@ export class WebhookService {
 
     const notifications = await this.webhookNotificationModel
       .find({
-        nextDeliveryAttemptAt: { $lte: fiveMinutesAgo },
+        $or: [
+          { nextDeliveryAttemptAt: { $lte: fiveMinutesAgo } },
+          // First attempt never ran (e.g. queue job lost), so no retry was ever scheduled
+          {
+            nextDeliveryAttemptAt: null,
+            deliveryAttemptCount: 0,
+            createdAt: { $lte: fiveMinutesAgo },
+          },
+        ],
         deliveredAt: null,
         deliveryAttemptCount: { $lt: 10 },
         deliveryAttemptAbortedAt: null,
@@ -882,6 +890,15 @@ export class WebhookService {
     console.log(`Queueing ${notifications.length} webhook notifications for retry`)
 
     for (const notification of notifications) {
+      if (!notification.nextDeliveryAttemptAt) {
+        // Claim it so it isn't re-queued (and sorted first) on every sweep
+        // while its job is still waiting; retried via the normal path after 5 min
+        const claimed = await this.webhookNotificationModel.updateOne(
+          { _id: notification._id, nextDeliveryAttemptAt: null },
+          { $set: { nextDeliveryAttemptAt: now } },
+        )
+        if (!claimed.modifiedCount) continue
+      }
       await this.webhookQueueService.addWebhookDeliveryJob(
         notification._id.toString(),
       )

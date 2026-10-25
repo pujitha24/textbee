@@ -427,6 +427,44 @@ describe('WebhookService', () => {
   })
 })
 
+describe('WebhookService checkForNotificationsToDeliver', () => {
+  it('also picks up pending notifications whose first attempt never ran', async () => {
+    const limit = jest.fn().mockResolvedValue([{ _id: 'n1' }])
+    const sort = jest.fn().mockReturnValue({ limit })
+    const find = jest.fn().mockReturnValue({ sort })
+    const addWebhookDeliveryJob = jest.fn().mockResolvedValue(undefined)
+    const updateOne = jest.fn().mockResolvedValue({ modifiedCount: 1 })
+    const service = new WebhookService(
+      {} as any,
+      {
+        updateMany: jest.fn().mockResolvedValue(undefined),
+        updateOne,
+        find,
+      } as any,
+      { addWebhookDeliveryJob } as any,
+      {} as any,
+      {} as any,
+    )
+
+    await service.checkForNotificationsToDeliver()
+
+    const query = find.mock.calls[0][0]
+    expect(query.$or).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          nextDeliveryAttemptAt: null,
+          deliveryAttemptCount: 0,
+        }),
+      ]),
+    )
+    expect(updateOne).toHaveBeenCalledWith(
+      { _id: 'n1', nextDeliveryAttemptAt: null },
+      { $set: { nextDeliveryAttemptAt: expect.any(Date) } },
+    )
+    expect(addWebhookDeliveryJob).toHaveBeenCalledWith('n1')
+  })
+})
+
 describe('WebhookService payload simUsed', () => {
   const setup = () => {
     const webhookSubscriptionModel: any = {
